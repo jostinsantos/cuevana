@@ -1,0 +1,21 @@
+{
+  "id": "cuevana-source",
+  "name": "Cuevana",
+  "version": "1.0.0",
+  "description": "Fuente Cuevana (wv3.cuevana3.eu). getStreams + extractores HLS/MP4 de embeds.",
+  "logo": "assets/logo.png",
+  "author": "Community",
+  "types": ["source"],
+  "type": "source",
+  "entry": "index.js",
+  "resources": ["stream"],
+  "exports": ["getStreams", "extract"],
+  "supportedTypes": ["movie", "tv"],
+  "contentLanguage": ["es"],
+  "extra": {
+    "provider": "js",
+    "style": "nuvio-js",
+    "base": "https://wv3.cuevana3.eu",
+    "tmdbApiKey": "a2d9bbed370d9f678e34006f8750a5a5"
+  }
+}
