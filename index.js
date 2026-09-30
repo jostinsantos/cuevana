@@ -1,9 +1,7 @@
 /**
- * Fuente Cuevana — lógica en el repo (GitHub).
- * getStreams(tmdbId, type, season, episode) → lista de streams
+ * Fuente Cuevana — Extracción directa HLS (.m3u8) / MP4
+ * getStreams(tmdbId, type, season, episode) → lista de streams directos
  * extract(embedUrl) → m3u8/mp4 resuelto o null
- *
- * La app no scrapeaa Cuevana: solo ejecuta este JS.
  */
 
 var TMDB_KEY = 'a2d9bbed370d9f678e34006f8750a5a5';
@@ -25,20 +23,28 @@ var DOMAIN_MAP = {
   'filelions.com': 'callistanise.com'
 };
 
-// ─── helpers ─────────────────────────────────────────────
+// ─── HELPERS ─────────────────────────────────────────────
 async function httpGet(url, headers) {
-  var h = Object.assign({ 'User-Agent': UA, Accept: '*/*' }, headers || {});
-  var res = await fetch(url, { headers: h });
-  if (!res.ok) return null;
-  return await res.text();
+  try {
+    var h = Object.assign({ 'User-Agent': UA, 'Accept': '*/*' }, headers || {});
+    var res = await fetch(url, { headers: h });
+    if (!res.ok) return null;
+    return await res.text();
+  } catch (e) {
+    return null;
+  }
 }
 
 async function httpGetJson(url) {
-  var res = await fetch(url, {
-    headers: { Accept: 'application/json', 'User-Agent': UA },
-  });
-  if (!res.ok) return null;
-  return await res.json();
+  try {
+    var res = await fetch(url, {
+      headers: { Accept: 'application/json', 'User-Agent': UA },
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (e) {
+    return null;
+  }
 }
 
 function slugify(title) {
@@ -78,7 +84,6 @@ function isAllowed(name) {
 function mapDomain(url) {
   if (!url) return url;
   var out = String(url);
-  // Reemplazo directo en string (por si viene sin parsear bien)
   Object.keys(DOMAIN_MAP).forEach(function (k) {
     if (out.indexOf(k) >= 0) {
       out = out.split(k).join(DOMAIN_MAP[k]);
@@ -98,7 +103,96 @@ function mapDomain(url) {
   }
 }
 
-// ─── TMDB titles ─────────────────────────────────────────
+// Desempaquetador Dean Edwards p.a.c.k.e.r (Usado por StreamWish, VidHide, etc.)
+function unpackPacker(code) {
+  try {
+    var evalRegex = /eval\(function\(p,a,c,k,e,r\)/;
+    if (!evalRegex.test(code)) return code;
+
+    var match = /}\('([\s\S]*?)',(\d+),(\d+),'([\s\S]*?)'\.split\('\|'\)/.exec(code);
+    if (!match) return code;
+
+    var p = match[1];
+    var a = parseInt(match[2], 10);
+    var c = parseInt(match[3], 10);
+    var k = match[4].split('|');
+
+    function e(c) {
+      return (c < a ? '' : e(parseInt(c / a, 10))) + ((c = c % a) > 35 ? String.fromCharCode(c + 29) : c.toString(36));
+    }
+
+    while (c--) {
+      if (k[c]) {
+        p = p.replace(new RegExp('\\b' + e(c) + '\\b', 'g'), k[c]);
+      }
+    }
+    return p;
+  } catch (err) {
+    return code;
+  }
+}
+
+// ─── EXTRACTOR CORE ──────────────────────────────────────
+async function extract(embedUrl) {
+  if (!embedUrl) return null;
+  embedUrl = mapDomain(embedUrl);
+
+  try {
+    var html = await httpGet(embedUrl, { Referer: BASE + '/' });
+    if (!html) return null;
+
+    // A) Si es un player intermedio de Cuevana (ej. player.php?h=...)
+    var redirectUrl = null;
+    var m1 = /var url = '([^']+)'/.exec(html) || /var url = "([^"]+)"/.exec(html);
+    if (m1) redirectUrl = m1[1];
+
+    if (redirectUrl) {
+      embedUrl = mapDomain(redirectUrl);
+      html = await httpGet(embedUrl, { Referer: BASE + '/' });
+      if (!html) return null;
+    }
+
+    // B) Buscar si el HTML contiene JS empaquetado (eval(function(p,a,c,k...)))
+    var unpacked = unpackPacker(html);
+
+    // C) Extraer enlace HLS (.m3u8) o MP4
+    var streamUrl = null;
+
+    // Patrón 1: file:"https://...m3u8" o sources:[{file:...}]
+    var fileMatch = /file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i.exec(unpacked) ||
+                      /file\s*:\s*["']([^"']+)["']/i.exec(unpacked);
+
+    if (fileMatch) {
+      streamUrl = fileMatch[1].replace(/\\/g, '');
+    }
+
+    // Patrón 2: Captura directa de regex de URL HTTP(S) con .m3u8 o .mp4
+    if (!streamUrl) {
+      var directMatch = /(https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*)/i.exec(unpacked);
+      if (directMatch) streamUrl = directMatch[0];
+    }
+
+    // Validar que el stream sea una URL válida
+    if (streamUrl && (streamUrl.indexOf('.m3u8') >= 0 || streamUrl.indexOf('.mp4') >= 0)) {
+      var parsedOrigin = '';
+      try { parsedOrigin = new URL(embedUrl).origin; } catch (e) {}
+
+      return {
+        url: streamUrl,
+        quality: 'Auto',
+        headers: {
+          'User-Agent': UA,
+          'Referer': embedUrl,
+          'Origin': parsedOrigin
+        }
+      };
+    }
+  } catch (e) {}
+
+  return null;
+}
+
+// ─── TMDB & CUEVANA SCRAPING ─────────────────────────────
 async function getTmdbInfo(tmdbId, isMovie) {
   var endpoint = isMovie ? 'movie' : 'tv';
   async function fetchLang(lang) {
@@ -127,7 +221,6 @@ async function getTmdbInfo(tmdbId, isMovie) {
   };
 }
 
-// ─── NEXT_DATA ───────────────────────────────────────────
 function extractNextData(html) {
   var m = /<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/.exec(html);
   if (!m) return null;
@@ -191,74 +284,6 @@ function buildMovieCandidates(tmdb) {
   return Array.from(new Set(out));
 }
 
-// ─── resolve embed → m3u8 (player.php style + extractors) ─
-async function resolvePlayer(sourceUrl) {
-  if (!sourceUrl) return null;
-  var html = await httpGet(sourceUrl);
-  if (!html) return null;
-  var videoUrl = null;
-  var m1 = /var url = '([^']+)'/.exec(html);
-  if (m1) videoUrl = m1[1];
-  if (!videoUrl) {
-    var m2 = /var url = "([^"]+)"/.exec(html);
-    if (m2) videoUrl = m2[1];
-  }
-  if (!videoUrl) {
-    var m3 = /(?:file|src|source)\s*[:=]\s*["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/i.exec(html);
-    if (m3) videoUrl = m3[1];
-  }
-  if (!videoUrl) return null;
-  return mapDomain(videoUrl);
-}
-
-/** Extractor público: embed → stream directo */
-async function extract(embedUrl) {
-  // Mapear host (streamwish.to → playnixes.com, vidhidepro → callistanise)
-  embedUrl = mapDomain(embedUrl);
-
-  // 1) genérico var url / m3u8 en HTML
-  var resolved = await resolvePlayer(embedUrl);
-  if (resolved) {
-    return {
-      url: resolved,
-      quality: 'HD',
-      serverName: 'generic',
-      headers: { 'User-Agent': UA, Referer: embedUrl },
-    };
-  }
-  // 2) StreamWish-like packed / file:
-  try {
-    var html = await httpGet(embedUrl, { Referer: embedUrl });
-    if (html) {
-      var fileM = /file\s*:\s*["']([^"']+)["']/i.exec(html);
-      if (fileM) {
-        var u = fileM[1].replace(/\\/g, '');
-        return {
-          url: u,
-          quality: 'Auto',
-          serverName: 'streamwish',
-          headers: {
-            'User-Agent': UA,
-            Referer: embedUrl,
-            Origin: new URL(embedUrl).origin,
-          },
-        };
-      }
-      var m3 = /https?:\/\/[^\s"']+\.m3u8[^\s"']*/i.exec(html);
-      if (m3) {
-        return {
-          url: m3[0],
-          quality: 'HD',
-          serverName: 'm3u8',
-          headers: { 'User-Agent': UA, Referer: embedUrl },
-        };
-      }
-    }
-  } catch (e) {}
-  return null;
-}
-
-// ─── scrape ──────────────────────────────────────────────
 async function scrapeMovie(tmdb) {
   var candidates = buildMovieCandidates(tmdb);
   var found = await findWorkingUrl(candidates, '"thisMovie"');
@@ -310,10 +335,7 @@ async function scrapeEpisode(tmdb, season, episode) {
   return videoGroupsFromData(pageProps.episode.videos);
 }
 
-/**
- * API principal (compatible Nuvio / app).
- * @returns {Promise<Array<{url,title,quality,language,headers?}>>}
- */
+// ─── MAIN METHOD ─────────────────────────────────────────
 async function getStreams(tmdbId, type, season, episode) {
   var id = parseInt(tmdbId, 10);
   if (!id) return [];
@@ -334,41 +356,29 @@ async function getStreams(tmdbId, type, season, episode) {
       var video = group.videos[v];
       if (!isAllowed(video.cyberlocker)) continue;
 
-      // 1) URL del embed (cyberlocker)
-      var embed = mapDomain(video.url);
-      if (!embed) continue;
+      var embedUrl = mapDomain(video.url);
+      if (!embedUrl) continue;
 
-      // 2) Pasar SIEMPRE por extractor
-      var playUrl = null;
-      var headers = { 'User-Agent': UA, Referer: BASE + '/' };
-      var quality = video.quality || 'HD';
+      // Invocar siempre al extractor
+      var extracted = await extract(embedUrl);
 
-      var resolved = await resolvePlayer(embed);
-      if (resolved && (resolved.indexOf('.m3u8') >= 0 || resolved.indexOf('.mp4') >= 0)) {
-        playUrl = resolved;
-      } else {
-        var ex = await extract(resolved || embed);
-        if (ex && ex.url) {
-          playUrl = ex.url;
-          if (ex.headers) headers = ex.headers;
-          if (ex.quality) quality = ex.quality;
-        }
-      }
+      // FILTRO CRÍTICO: Si no se logró extraer un HLS/MP4 (.m3u8), SE OMITE el servidor.
+      if (!extracted || !extracted.url) continue;
 
-      // 3) Si hay m3u8/mp4 → ese; si no → el embed (la app también puede reintentar extract)
-      var finalUrl = playUrl || embed;
-      if (seen[finalUrl]) continue;
-      seen[finalUrl] = true;
+      var directUrl = extracted.url;
+      if (seen[directUrl]) continue;
+      seen[directUrl] = true;
 
       var name = video.cyberlocker
         ? video.cyberlocker.charAt(0).toUpperCase() + video.cyberlocker.slice(1)
         : 'Servidor';
+
       out.push({
-        url: finalUrl,
-        title: 'Cuevana · ' + name + (playUrl ? '' : ' (embed)'),
-        quality: quality,
+        url: directUrl,
+        title: 'Cuevana · ' + name,
+        quality: extracted.quality || video.quality || 'HD',
         language: langCode(group.language),
-        headers: headers,
+        headers: extracted.headers,
       });
     }
   }
