@@ -19,9 +19,10 @@ var ALLOWED = [
 ];
 
 var DOMAIN_MAP = {
-  'streamwish.to': 'hgplaycdn.com',
+  'streamwish.to': 'playnixes.com',
   'vidhidepro.com': 'callistanise.com',
-  'filelions.to': 'callistanise.com'
+  'filelions.to': 'callistanise.com',
+  'filelions.com': 'callistanise.com'
 };
 
 // ─── helpers ─────────────────────────────────────────────
@@ -75,8 +76,16 @@ function isAllowed(name) {
 }
 
 function mapDomain(url) {
+  if (!url) return url;
+  var out = String(url);
+  // Reemplazo directo en string (por si viene sin parsear bien)
+  Object.keys(DOMAIN_MAP).forEach(function (k) {
+    if (out.indexOf(k) >= 0) {
+      out = out.split(k).join(DOMAIN_MAP[k]);
+    }
+  });
   try {
-    var u = new URL(url);
+    var u = new URL(out);
     var host = u.host.toLowerCase();
     Object.keys(DOMAIN_MAP).forEach(function (k) {
       if (host.indexOf(k) >= 0) {
@@ -85,7 +94,7 @@ function mapDomain(url) {
     });
     return u.toString();
   } catch (e) {
-    return url;
+    return out;
   }
 }
 
@@ -204,6 +213,9 @@ async function resolvePlayer(sourceUrl) {
 
 /** Extractor público: embed → stream directo */
 async function extract(embedUrl) {
+  // Mapear host (streamwish.to → playnixes.com, vidhidepro → callistanise)
+  embedUrl = mapDomain(embedUrl);
+
   // 1) genérico var url / m3u8 en HTML
   var resolved = await resolvePlayer(embedUrl);
   if (resolved) {
@@ -323,7 +335,7 @@ async function getStreams(tmdbId, type, season, episode) {
       if (!isAllowed(video.cyberlocker)) continue;
 
       // 1) URL del embed (cyberlocker)
-      var embed = video.url;
+      var embed = mapDomain(video.url);
       if (!embed) continue;
 
       // 2) Pasar SIEMPRE por extractor
