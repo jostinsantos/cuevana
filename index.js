@@ -18,17 +18,6 @@ var ALLOWED = [
   'vibuxer', 'premilkyway', 'dintezuvio', 'dramiyos', 'wishembed'
 ];
 
-// Map de dominios que rotan
-var DOMAIN_MAP = {
-  'streamwish.to': 'vibuxer.com',
-  'hglink.to': 'vibuxer.com',
-  'streamwish.com': 'vibuxer.com',
-  'filelions.to': 'callistanise.com',
-  'filelions.com': 'callistanise.com',
-  'vidhidepro.com': 'callistanise.com',
-  'vidhide.com': 'callistanise.com'
-};
-
 // ─── HELPERS ─────────────────────────────────────────────
 async function httpGet(url, headers) {
   try {
@@ -40,7 +29,7 @@ async function httpGet(url, headers) {
       },
       headers || {}
     );
-    var res = await fetch(url, { headers: h, redirect: 'follow' });
+    var res = await fetchT(url, { headers: h, redirect: 'follow' });
     if (!res.ok) return null;
     return await res.text();
   } catch (e) {
@@ -50,7 +39,7 @@ async function httpGet(url, headers) {
 
 async function httpGetJson(url) {
   try {
-    var res = await fetch(url, {
+    var res = await fetchT(url, {
       headers: { Accept: 'application/json', 'User-Agent': UA },
     });
     if (!res.ok) return null;
@@ -93,29 +82,108 @@ function isAllowed(name) {
   }
   return false;
 }
+// ─── DEBUG / RED / URL (sin depender de new URL: en Hermes/React Native no funciona) ──
+var DEBUG = false; // pon true para ver en consola por qué falla cada embed
+
+function dbg() {
+  if (!DEBUG || typeof console === 'undefined') return;
+  try {
+    console.log.apply(console, ['[Cuevana]'].concat([].slice.call(arguments)));
+  } catch (e) {}
+}
+
+// fetch con timeout (evita que un host muerto congele todo getStreams)
+function fetchT(url, opts, ms) {
+  opts = opts || {};
+  ms = ms || 8000;
+  if (typeof AbortController === 'undefined') return fetch(url, opts);
+  var ctrl = new AbortController();
+  var timer = setTimeout(function () {
+    try {
+      ctrl.abort();
+    } catch (e) {}
+  }, ms);
+  return fetch(url, Object.assign({}, opts, { signal: ctrl.signal })).then(
+    function (r) {
+      clearTimeout(timer);
+      return r;
+    },
+    function (e) {
+      clearTimeout(timer);
+      throw e;
+    }
+  );
+}
+
+function originOf(url) {
+  var m = /^(https?:\/\/[^\/?#]+)/i.exec(String(url || ''));
+  return m ? m[1] : '';
+}
+
+function absUrl(u, base) {
+  u = String(u || '').trim();
+  if (!u) return u;
+  if (/^https?:\/\//i.test(u)) return u;
+  if (u.indexOf('//') === 0) return 'https:' + u;
+  var origin = originOf(base);
+  if (u.charAt(0) === '/') return origin + u;
+  var rest = String(base || '').slice(origin.length).replace(/[?#][\s\S]*$/, '');
+  if (!rest) return origin + '/' + u;
+  return origin + rest.replace(/\/[^\/]*$/, '/') + u;
+}
+
+function withHost(url, host) {
+  return String(url).replace(/^(https?:\/\/)[^\/?#]+/i, '$1' + host);
+}
+
+// ─── MAPEO DE HOSTS QUE ROTAN ────────────────────────────
+// clave = nombre del dominio SIN tld  →  host destino
+// (funciona con cualquier tld y con subdominios: streamwish.to / .com / .top / www.streamwish.xyz ...)
+var HOST_MAP = {
+  streamwish: 'vibuxer.com',
+  hglink: 'vibuxer.com',
+  awish: 'vibuxer.com',
+  strwish: 'vibuxer.com',
+  wishfast: 'vibuxer.com',
+  embedwish: 'vibuxer.com',
+  wishembed: 'vibuxer.com',
+  filelions: 'callistanise.com',
+  vidhidepro: 'callistanise.com',
+  vidhide: 'callistanise.com',
+};
 
 function mapDomain(url) {
-  if (!url) return url;
-  var out = String(url);
-  try {
-    var u = new URL(out);
-    var host = u.host.toLowerCase();
-    Object.keys(DOMAIN_MAP).forEach(function (k) {
-      if (host.indexOf(k) >= 0) {
-        u.host = host.split(k).join(DOMAIN_MAP[k]);
-      }
-    });
-    return u.toString();
-  } catch (e) {
-    Object.keys(DOMAIN_MAP).forEach(function (k) {
-      if (out.indexOf(k) >= 0) out = out.split(k).join(DOMAIN_MAP[k]);
-    });
-    return out;
+  var s = String(url || '').trim();
+  if (!s) return s;
+  if (s.indexOf('//') === 0) s = 'https:' + s;
+  var m = /^https?:\/\/([^\/?#:]+)/i.exec(s);
+  if (!m) return s;
+  var labels = m[1].toLowerCase().replace(/^www\./, '').split('.');
+  for (var i = 0; i < labels.length - 1; i++) {
+    if (HOST_MAP[labels[i]]) return withHost(s, HOST_MAP[labels[i]]);
   }
+  return s;
+}
+
+// Orden en el que se intenta un embed: host mapeado → host original → mirror alterno
+function embedCandidates(url) {
+  var s = String(url || '').trim();
+  if (s.indexOf('//') === 0) s = 'https:' + s;
+  var mapped = mapDomain(s);
+  var list = [mapped, s];
+  if (detectServer(mapped) === 'streamwish') list.push(withHost(s, 'hlswish.com'));
+  return list.filter(function (v, i, a) {
+    return v && a.indexOf(v) === i;
+  });
+}
+
+function hostOf(url) {
+  var m = /^(?:https?:)?\/\/([^\/?#]+)/i.exec(String(url || ''));
+  return m ? m[1].toLowerCase() : String(url || '').toLowerCase();
 }
 
 function detectServer(url) {
-  var s = String(url || '').toLowerCase();
+  var s = hostOf(url); // solo el host, así un "voe" en el path no confunde
   if (
     s.indexOf('voe') >= 0 ||
     s.indexOf('cloudwindow') >= 0 ||
@@ -126,7 +194,6 @@ function detectServer(url) {
     s.indexOf('streamwish') >= 0 ||
     s.indexOf('hlswish') >= 0 ||
     s.indexOf('hglink') >= 0 ||
-    s.indexOf('filelions') >= 0 ||
     s.indexOf('vibuxer') >= 0 ||
     s.indexOf('premilkyway') >= 0 ||
     s.indexOf('wishembed') >= 0 ||
@@ -134,11 +201,14 @@ function detectServer(url) {
     s.indexOf('strwish') >= 0 ||
     s.indexOf('wishfast') >= 0 ||
     s.indexOf('hanerix') >= 0 ||
-    s.indexOf('embedwish') >= 0
+    s.indexOf('embedwish') >= 0 ||
+    s.indexOf('playnixes') >= 0 ||
+    s.indexOf('hgplaycdn') >= 0
   )
     return 'streamwish';
   if (
     s.indexOf('vidhide') >= 0 ||
+    s.indexOf('filelions') >= 0 ||
     s.indexOf('minochinos') >= 0 ||
     s.indexOf('dintezuvio') >= 0 ||
     s.indexOf('dramiyos') >= 0 ||
@@ -151,6 +221,7 @@ function detectServer(url) {
     return 'doodstream';
   return 'unknown';
 }
+
 
 // ─── QUALITY HELPERS (del extractor de referencia) ───────
 var QUALITY_MAPS = {
@@ -212,7 +283,7 @@ async function detectQuality(url, headers) {
   var q = detectQualityFromUrl(url);
   if (q !== 'Unknown') return q;
   try {
-    var res = await fetch(url, {
+    var res = await fetchT(url, {
       headers: Object.assign({ 'User-Agent': UA }, headers || {}),
       redirect: 'follow',
     });
@@ -246,87 +317,54 @@ function b64decode(s) {
   } catch (e) {}
   return null;
 }
+// ─── PACKER (Dean Edwards) — funciona con cualquier variante del wrapper ─────
+// El bug original: /\{[^}]+\}\s*\(/ fallaba con el wrapper de StreamWish porque
+// el cuerpo de la función tiene muchas "}". Aquí se ancla en los ARGUMENTOS:  }('...',62,N,'...'.split('|')
+var PACKER_ARGS =
+  /\}\s*\(\s*(['"])((?:\\[\s\S]|(?!\1)[^\\])*)\1\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(['"])((?:\\[\s\S]|(?!\5)[^\\])*)\5\s*\.split\(\s*(['"])\|\7\s*\)/g;
 
-// ─── PACKER (Dean Edwards / VidHide style) ───────────────
+function unpackOne(p, a, k) {
+  p = p.replace(/\\(['"\\])/g, '$1');
+  var chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  function unbase(s) {
+    var r = 0;
+    for (var i = 0; i < s.length; i++) {
+      var pos = chars.indexOf(s.charAt(i));
+      if (pos < 0 || pos >= a) return NaN;
+      r = r * a + pos;
+    }
+    return r;
+  }
+  return p.replace(/\b\w+\b/g, function (tok) {
+    var idx = unbase(tok);
+    if (isNaN(idx) || idx >= k.length) return tok;
+    return k[idx] ? k[idx] : tok;
+  });
+}
+
+// Devuelve TODAS las capas desempaquetadas (soporta packers anidados)
+function unpackAll(text) {
+  var out = [];
+  var queue = [String(text || '')];
+  var guard = 0;
+  while (queue.length && guard++ < 8) {
+    var src = queue.shift();
+    var re = new RegExp(PACKER_ARGS.source, 'g');
+    var m;
+    while ((m = re.exec(src)) !== null) {
+      try {
+        var un = unpackOne(m[2], parseInt(m[3], 10), m[6].split('|'));
+        out.push(un);
+        if (/eval\(function\(p,a,c,k,e,/.test(un)) queue.push(un);
+      } catch (e) {}
+    }
+  }
+  return out;
+}
+
 function unpackPacker(code) {
-  try {
-    var match = /eval\(function\(p,a,c,k,e,[a-z]\)\{[^}]+\}\s*\('([\s\S]+?)',\s*(\d+),\s*(\d+),\s*'([\s\S]+?)'\.split\('\|'\)/.exec(
-      code
-    );
-    if (!match) return code;
-    var p = match[1];
-    var a = parseInt(match[2], 10);
-    var c = parseInt(match[3], 10);
-    var k = match[4].split('|');
-    var chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
-    function unbase(str) {
-      var result = 0;
-      for (var i = 0; i < str.length; i++) {
-        var pos = chars.indexOf(str[i]);
-        if (pos === -1) return NaN;
-        result = result * a + pos;
-      }
-      return result;
-    }
-    return p.replace(/\b([0-9a-zA-Z]+)\b/g, function (tok) {
-      var idx = unbase(tok);
-      if (isNaN(idx) || idx >= k.length) return tok;
-      return k[idx] && k[idx] !== '' ? k[idx] : tok;
-    });
-  } catch (e) {
-    return code;
-  }
-}
-
-function unpackVidHide(script) {
-  try {
-    var match = /eval\(function\(p,a,c,k,e,[rd]\)\{.*?\}\s*\('([\s\S]*?)',\s*(\d+),\s*(\d+),\s*'([\s\S]*?)'\.split\('\|'\)/.exec(
-      script
-    );
-    if (!match) return null;
-    var p = match[1];
-    var a = parseInt(match[2], 10);
-    var k = match[4].split('|');
-    var chars = '0123456789abcdefghijklmnopqrstuvwxyz';
-    function decode(l, s) {
-      var res = '';
-      var n = l;
-      while (n > 0) {
-        res = chars[n % s] + res;
-        n = Math.floor(n / s);
-      }
-      return res || '0';
-    }
-    return p.replace(/\b\w+\b/g, function (tok) {
-      var s = parseInt(tok, 36);
-      if (!isNaN(s) && s < k.length && k[s]) return k[s];
-      return decode(s, a);
-    });
-  } catch (e) {
-    return null;
-  }
-}
-
-function extractHlsFromUnpacked(unpacked, origin) {
-  // Prefer hls4 > hls3 > hls2 en objeto JSON-like
-  var objMatch = unpacked.match(/\{[^{}]*"hls[234]"\s*:\s*"([^"]+)"[^{}]*\}/);
-  if (objMatch) {
-    try {
-      var fixed = objMatch[0].replace(/(\w+)\s*:/g, '"$1":');
-      var parsed = JSON.parse(fixed);
-      var a = parsed.hls4 || parsed.hls3 || parsed.hls2;
-      if (a) return a.startsWith('/') ? origin + a : a;
-    } catch (e) {
-      var m = objMatch[0].match(/"hls[234]"\s*:\s*"([^"]+\.m3u8[^"]*)"/);
-      if (m) return m[1].startsWith('/') ? origin + m[1] : m[1];
-    }
-  }
-  var m2 = unpacked.match(/["']([^"']{30,}\.m3u8[^"']*)['"]/i);
-  if (m2) {
-    var u = m2[1];
-    return u.startsWith('/') ? origin + u : u;
-  }
-  return null;
+  var all = unpackAll(code);
+  return all.length ? all.join('\n') : code;
 }
 
 function findM3u8(text) {
@@ -337,6 +375,59 @@ function findM3u8(text) {
     /file\s*:\s*["']([^"']+\.m3u8[^"']*)["']/i.exec(text);
   if (!m) return null;
   return (m[1] || m[0]).replace(/\\/g, '');
+}
+
+// Busca el stream dentro de un texto ya desempaquetado (o HTML plano)
+function extractHlsFromUnpacked(text, origin) {
+  if (!text) return null;
+
+  // 1) claves hls4 > hls3 > hls2 > hls  (el bug original: replace(/(\w+)\s*:/) rompía "https:" y el JSON.parse siempre fallaba)
+  var found = {};
+  var re = /["']?\b(hls[234]?)["']?\s*:\s*["']([^"']+)["']/g;
+  var m;
+  while ((m = re.exec(text)) !== null) {
+    var v = m[2].replace(/\\/g, '');
+    if (/^(https?:)?\/\//i.test(v) || v.charAt(0) === '/') {
+      if (!found[m[1]]) found[m[1]] = v;
+    }
+  }
+  var pick = found.hls4 || found.hls3 || found.hls2 || found.hls;
+  if (pick) return absUrl(pick, origin + '/');
+
+  // 2) cualquier .m3u8 absoluto
+  var abs = findM3u8(text);
+  if (abs) return abs;
+
+  // 3) .m3u8 relativo
+  var rel = /["'](\/[^"'\s]+\.m3u8[^"']*)["']/i.exec(text);
+  if (rel) return absUrl(rel[1].replace(/\\/g, ''), origin + '/');
+
+  // 4) file: "...mp4"
+  var f = /file\s*:\s*["']([^"']+\.mp4[^"']*)["']/i.exec(text);
+  if (f) return absUrl(f[1].replace(/\\/g, ''), origin + '/');
+
+  return null;
+}
+
+function findStream(html, origin) {
+  if (!html) return null;
+  var layers = unpackAll(html).concat([html]);
+  for (var i = 0; i < layers.length; i++) {
+    var s = extractHlsFromUnpacked(layers[i], origin);
+    if (s) return s;
+  }
+  return null;
+}
+
+// Si el link es /stream/... sin .m3u8, seguir el redirect hasta la playlist real
+async function followStream(u, origin) {
+  if (u.indexOf('.m3u8') >= 0 || u.indexOf('.mp4') >= 0) return u;
+  if (u.indexOf('/stream/') < 0) return u;
+  try {
+    var f = await fetchT(u, { headers: { 'User-Agent': UA, Referer: origin + '/' }, redirect: 'follow' });
+    if (f && f.url && f.url.indexOf('.m3u8') >= 0) return f.url;
+  } catch (e) {}
+  return u;
 }
 
 // ─── VOE (del extractor de referencia) ───────────────────
@@ -378,7 +469,7 @@ function voeDecode(encoded, keysRaw) {
 
 async function resolveVoe(url) {
   try {
-    var res = await fetch(url, {
+    var res = await fetchT(url, {
       headers: {
         'User-Agent': UA,
         Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -393,7 +484,7 @@ async function resolveVoe(url) {
     if (/permanentToken/i.test(html)) {
       var redir = html.match(/window\.location\.href\s*=\s*'([^']+)'/i);
       if (redir) {
-        var res2 = await fetch(redir[1], {
+        var res2 = await fetchT(redir[1], {
           headers: { 'User-Agent': UA, Referer: url },
           redirect: 'follow',
         });
@@ -409,8 +500,8 @@ async function resolveVoe(url) {
       var enc = jsonMatch[1];
       var loaderUrl = jsonMatch[2].startsWith('http')
         ? jsonMatch[2]
-        : new URL(jsonMatch[2], url).href;
-      var loaderRes = await fetch(loaderUrl, {
+        : absUrl(jsonMatch[2], url);
+      var loaderRes = await fetchT(loaderUrl, {
         headers: { 'User-Agent': UA, Referer: url },
         redirect: 'follow',
       });
@@ -466,205 +557,122 @@ async function resolveVoe(url) {
   } catch (e) {}
   return null;
 }
-
-// ─── STREAMWISH / HLSWISH (del extractor de referencia) ──
-async function resolveStreamWish(url) {
-  try {
-    var n = mapDomain(url);
-    var originMatch = n.match(/^(https?:\/\/[^/]+)/);
-    var origin = (originMatch && originMatch[1]) || 'https://hlswish.com';
-
-    var res = await fetch(n, {
-      headers: {
-        'User-Agent': UA,
-        Referer: 'https://embed69.org/',
-        Origin: 'https://embed69.org',
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'es-MX,es;q=0.9',
-      },
-      redirect: 'follow',
-    });
-    if (!res.ok) return null;
-    var html = await res.text();
-
-    // 1) file: "..."
-    var fileM = html.match(/file\s*:\s*["']([^"']+)["']/i);
-    if (fileM) {
-      var o = fileM[1];
-      if (o.startsWith('/')) o = origin + o;
-      // Si apunta a /stream/ seguir redirect hasta m3u8
-      if (o.indexOf('/stream/') >= 0) {
-        try {
-          var follow = await fetch(o, {
-            headers: { 'User-Agent': UA, Referer: origin + '/' },
-            redirect: 'follow',
-          });
-          if (follow.url && follow.url.indexOf('.m3u8') >= 0) o = follow.url;
-        } catch (e) {}
-      }
-      if (o.indexOf('.m3u8') >= 0 || o.indexOf('.mp4') >= 0 || o.indexOf('/stream/') >= 0) {
-        return {
-          url: o,
-          quality: detectQualityFromUrl(o),
-          headers: { 'User-Agent': UA, Referer: origin + '/' },
-        };
-      }
-    }
-
-    // 2) Packer
-    var packed = html.match(
-      /eval\(function\(p,a,c,k,e,[a-z]\)\{[^}]+\}\s*\('([\s\S]+?)',\s*(\d+),\s*(\d+),\s*'([\s\S]+?)'\.split\('\|'\)/
-    );
-    if (packed) {
-      var unpacked = unpackPacker(packed[0]);
-      var hls = extractHlsFromUnpacked(unpacked, origin);
-      if (hls) {
-        return {
-          url: hls,
-          quality: detectQualityFromUrl(hls),
-          headers: { 'User-Agent': UA, Referer: origin + '/' },
-        };
-      }
-    }
-
-    // 3) Regex directo m3u8
-    var direct = html.match(/https?:\/\/[^"'\s\\]+\.m3u8[^"'\s\\]*/i);
-    if (direct) {
-      return {
-        url: direct[0],
-        quality: detectQualityFromUrl(direct[0]),
-        headers: { 'User-Agent': UA, Referer: origin + '/' },
-      };
-    }
-  } catch (e) {}
-  return null;
-}
-
-// ─── VIDHIDE (del extractor de referencia) ───────────────
-async function resolveVidHide(url) {
-  try {
-    var res = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'User-Agent': UA,
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        Referer: 'https://embed69.org/',
-      },
-      redirect: 'follow',
-    });
-    if (!res.ok) return null;
-    var html = await res.text();
-
-    var packedMatch = html.match(
-      /eval\(function\(p,a,c,k,e,[rd]\)[\s\S]*?\.split\('\|'\)[^\)]*\)\)/
-    );
-    if (!packedMatch) return null;
-
-    var unpacked = unpackVidHide(packedMatch[0]);
-    if (!unpacked) return null;
-
-    var hls4 = unpacked.match(/"hls4"\s*:\s*"([^"]+)"/);
-    var hls2 = unpacked.match(/"hls2"\s*:\s*"([^"]+)"/);
-    var path = (hls4 && hls4[1]) || (hls2 && hls2[1]);
-    if (!path) return null;
-
-    var finalUrl = path.startsWith('http') ? path : new URL(url).origin + path;
-    var origin = new URL(url).origin;
-
-    return {
-      url: finalUrl,
-      quality: await detectQuality(finalUrl, { Referer: origin + '/' }),
-      headers: {
-        'User-Agent': UA,
-        Referer: origin + '/',
-        Origin: origin,
-      },
-    };
-  } catch (e) {
+// ─── STREAMWISH / VIDHIDE (misma mecánica: página con packer → hls) ──────
+async function resolvePacked(url) {
+  var origin = originOf(url);
+  var html = null;
+  var referers = ['https://embed69.org/', BASE + '/'];
+  for (var i = 0; i < referers.length && !html; i++) {
+    html = await httpGet(url, { Referer: referers[i], Origin: originOf(referers[i]) });
+  }
+  if (!html) {
+    dbg('sin HTML', url);
     return null;
   }
+  var s = findStream(html, origin);
+  if (!s) {
+    dbg('HTML sin stream', url, html.length);
+    return null;
+  }
+  s = await followStream(s, origin);
+  return {
+    url: s,
+    quality: await detectQuality(s, { Referer: origin + '/' }),
+    headers: { 'User-Agent': UA, Referer: origin + '/', Origin: origin },
+  };
 }
 
-// ─── GENÉRICO (player intermedio Cuevana + fallback) ─────
-async function resolveGeneric(url) {
+function resolveStreamWish(url) {
+  return resolvePacked(url);
+}
+
+function resolveVidHide(url) {
+  return resolvePacked(url);
+}
+
+// ─── GENÉRICO (player intermedio Cuevana + iframes + fallback) ─────
+async function resolveGeneric(url, depth) {
+  depth = depth || 0;
   try {
     var html = await httpGet(url, { Referer: BASE + '/' });
     if (!html) return null;
+    var origin = originOf(url);
 
     // var url = '...' (player.php estilo Cuevana)
-    var m1 =
-      /var url = '([^']+)'/.exec(html) || /var url = "([^"]+)"/.exec(html);
+    var m1 = /var url = '([^']+)'/.exec(html) || /var url = "([^"]+)"/.exec(html);
     if (m1) {
-      var redirected = mapDomain(m1[1]);
+      var redirected = absUrl(m1[1], url);
       if (redirected && redirected !== url) {
-        return extract(redirected);
+        var r1 = await extract(redirected, depth + 1);
+        if (r1) return r1;
       }
     }
 
-    var unpacked = unpackPacker(html);
-    var streamUrl =
-      findM3u8(unpacked) ||
-      findM3u8(html) ||
-      extractHlsFromUnpacked(unpacked, new URL(url).origin);
-
-    if (!streamUrl) {
-      var fileM = /file\s*:\s*["']([^"']+)["']/i.exec(unpacked || html);
-      if (fileM && /\.m3u8|\.mp4/i.test(fileM[1])) {
-        streamUrl = fileM[1].replace(/\\/g, '');
-      }
+    var streamUrl = findStream(html, origin);
+    if (streamUrl) {
+      return {
+        url: streamUrl,
+        quality: detectQualityFromUrl(streamUrl),
+        headers: { 'User-Agent': UA, Referer: url, Origin: origin },
+      };
     }
-    if (!streamUrl) return null;
-    if (streamUrl.startsWith('/')) streamUrl = new URL(url).origin + streamUrl;
 
-    var origin = '';
-    try {
-      origin = new URL(url).origin;
-    } catch (e) {}
-
-    return {
-      url: streamUrl,
-      quality: detectQualityFromUrl(streamUrl),
-      headers: { 'User-Agent': UA, Referer: url, Origin: origin },
-    };
+    // iframe anidado
+    var ifr = /<iframe[^>]+src=["']([^"']+)["']/i.exec(html);
+    if (ifr) {
+      var ifUrl = absUrl(ifr[1], url);
+      if (ifUrl && ifUrl !== url) return await extract(ifUrl, depth + 1);
+    }
   } catch (e) {
-    return null;
+    dbg('generic error', url, e && e.message);
   }
+  return null;
 }
 
 // ─── EXTRACT PRINCIPAL ───────────────────────────────────
-async function extract(embedUrl) {
-  if (!embedUrl) return null;
-  embedUrl = mapDomain(String(embedUrl).trim());
+function isStreamUrl(u) {
+  u = String(u || '').toLowerCase();
+  return (
+    u.indexOf('.m3u8') >= 0 ||
+    u.indexOf('.mp4') >= 0 ||
+    u.indexOf('/hls/') >= 0 ||
+    u.indexOf('/stream/') >= 0 ||
+    u.indexOf('playlist') >= 0
+  );
+}
 
-  var server = detectServer(embedUrl);
+async function extractOne(url, depth) {
+  var server = detectServer(url);
   var result = null;
-
   try {
-    if (server === 'voe') result = await resolveVoe(embedUrl);
-    else if (server === 'streamwish') result = await resolveStreamWish(embedUrl);
-    else if (server === 'vidhide') result = await resolveVidHide(embedUrl);
-    else result = await resolveGeneric(embedUrl);
+    if (server === 'voe') result = await resolveVoe(url);
+    else if (server === 'streamwish') result = await resolveStreamWish(url);
+    else if (server === 'vidhide') result = await resolveVidHide(url);
+    else result = await resolveGeneric(url, depth);
   } catch (e) {
+    dbg('resolver error', server, url, e && e.message);
     result = null;
   }
-
-  // Fallback genérico si el específico falló
-  if (!result || !result.url) {
+  // fallback genérico solo si había un resolver específico y falló
+  if ((!result || !result.url) && server !== 'unknown') {
     try {
-      result = await resolveGeneric(embedUrl);
+      result = await resolveGeneric(url, depth);
     } catch (e) {}
   }
+  return result;
+}
 
-  if (result && result.url) {
-    var u = result.url.toLowerCase();
-    if (
-      u.indexOf('.m3u8') >= 0 ||
-      u.indexOf('.mp4') >= 0 ||
-      u.indexOf('/hls/') >= 0 ||
-      u.indexOf('/stream/') >= 0 ||
-      u.indexOf('playlist') >= 0
-    ) {
-      return result;
+// Devuelve SOLO un stream directo (m3u8/mp4). Jamás devuelve el embed.
+async function extract(embedUrl, depth) {
+  depth = depth || 0;
+  if (!embedUrl || depth > 3) return null;
+  var candidates = embedCandidates(embedUrl);
+  dbg('candidatos', candidates);
+  for (var i = 0; i < candidates.length; i++) {
+    var r = await extractOne(candidates[i], depth);
+    if (r && r.url && r.url !== candidates[i] && isStreamUrl(r.url)) {
+      dbg('OK', candidates[i], '→', r.url);
+      return r;
     }
   }
   return null;
@@ -822,6 +830,41 @@ async function scrapeEpisode(tmdb, season, episode) {
 }
 
 // ─── MAIN ────────────────────────────────────────────────
+async function processVideo(group, video) {
+  try {
+    var embedUrl = String(video.url || '').trim();
+    if (!embedUrl) return null;
+
+    // extract() ya aplica el cambio de host y prueba los candidatos
+    var extracted = await extract(embedUrl, 0);
+
+    // Solo HLS/MP4 reales — NUNCA el embed puro
+    if (!extracted || !extracted.url) {
+      dbg('descartado (sin m3u8)', embedUrl);
+      return null;
+    }
+
+    var name = video.cyberlocker
+      ? video.cyberlocker.charAt(0).toUpperCase() + video.cyberlocker.slice(1)
+      : 'Servidor';
+
+    var q = extracted.quality;
+    if (!q || q === 'Unknown') q = video.quality || 'HD';
+
+    return {
+      name: 'Cuevana',
+      url: extracted.url,
+      title: 'Cuevana · ' + name,
+      quality: q,
+      language: langCode(group.language),
+      headers: extracted.headers || { 'User-Agent': UA, Referer: originOf(embedUrl) + '/' },
+    };
+  } catch (e) {
+    dbg('processVideo error', e && e.message);
+    return null;
+  }
+}
+
 async function getStreams(tmdbId, type, season, episode) {
   var id = parseInt(tmdbId, 10);
   if (!id) return [];
@@ -837,47 +880,28 @@ async function getStreams(tmdbId, type, season, episode) {
     ? await scrapeMovie(tmdb)
     : await scrapeEpisode(tmdb, season || 1, episode || 1);
 
+  // todos los embeds en PARALELO (antes era uno por uno y la app hacía timeout)
+  var jobs = [];
+  groups.forEach(function (group) {
+    group.videos.forEach(function (video) {
+      if (!isAllowed(video.cyberlocker) && !isAllowed(hostOf(video.url))) return;
+      jobs.push(processVideo(group, video));
+    });
+  });
+
+  var results = await Promise.all(jobs);
   var out = [];
   var seen = {};
-
-  for (var g = 0; g < groups.length; g++) {
-    var group = groups[g];
-    for (var v = 0; v < group.videos.length; v++) {
-      var video = group.videos[v];
-      if (!isAllowed(video.cyberlocker)) continue;
-
-      var embedUrl = mapDomain(video.url);
-      if (!embedUrl) continue;
-
-      var extracted = await extract(embedUrl);
-
-      // Solo HLS/MP4 reales — NUNCA el embed puro
-      if (!extracted || !extracted.url) continue;
-
-      var directUrl = extracted.url;
-      if (seen[directUrl]) continue;
-      seen[directUrl] = true;
-
-      var name = video.cyberlocker
-        ? video.cyberlocker.charAt(0).toUpperCase() + video.cyberlocker.slice(1)
-        : 'Servidor';
-
-      out.push({
-        url: directUrl,
-        title: 'Cuevana · ' + name,
-        quality: extracted.quality || video.quality || 'HD',
-        language: langCode(group.language),
-        headers: extracted.headers || {
-          'User-Agent': UA,
-          Referer: embedUrl,
-        },
-      });
-    }
-  }
+  results.forEach(function (r) {
+    if (!r || seen[r.url]) return;
+    seen[r.url] = true;
+    out.push(r);
+  });
   return out;
 }
 
 module.exports = {
   getStreams: getStreams,
   extract: extract,
+  mapDomain: mapDomain,
 };
