@@ -322,29 +322,41 @@ async function getStreams(tmdbId, type, season, episode) {
       var video = group.videos[v];
       if (!isAllowed(video.cyberlocker)) continue;
 
-      // 1) resolver player / cyberlocker
-      var resolved = await resolvePlayer(video.url);
-      // 2) extractor si aún no hay m3u8/mp4
-      if (!resolved || (resolved.indexOf('.m3u8') < 0 && resolved.indexOf('.mp4') < 0)) {
-        var ex = await extract(resolved || video.url);
-        if (ex && ex.url) resolved = ex.url;
+      // 1) URL del embed (cyberlocker)
+      var embed = video.url;
+      if (!embed) continue;
+
+      // 2) Pasar SIEMPRE por extractor
+      var playUrl = null;
+      var headers = { 'User-Agent': UA, Referer: BASE + '/' };
+      var quality = video.quality || 'HD';
+
+      var resolved = await resolvePlayer(embed);
+      if (resolved && (resolved.indexOf('.m3u8') >= 0 || resolved.indexOf('.mp4') >= 0)) {
+        playUrl = resolved;
+      } else {
+        var ex = await extract(resolved || embed);
+        if (ex && ex.url) {
+          playUrl = ex.url;
+          if (ex.headers) headers = ex.headers;
+          if (ex.quality) quality = ex.quality;
+        }
       }
-      if (!resolved) continue;
-      if (seen[resolved]) continue;
-      seen[resolved] = true;
+
+      // 3) Si hay m3u8/mp4 → ese; si no → el embed (la app también puede reintentar extract)
+      var finalUrl = playUrl || embed;
+      if (seen[finalUrl]) continue;
+      seen[finalUrl] = true;
 
       var name = video.cyberlocker
         ? video.cyberlocker.charAt(0).toUpperCase() + video.cyberlocker.slice(1)
         : 'Servidor';
       out.push({
-        url: resolved,
-        title: 'Cuevana · ' + name,
-        quality: video.quality || 'HD',
+        url: finalUrl,
+        title: 'Cuevana · ' + name + (playUrl ? '' : ' (embed)'),
+        quality: quality,
         language: langCode(group.language),
-        headers: {
-          'User-Agent': UA,
-          Referer: BASE + '/',
-        },
+        headers: headers,
       });
     }
   }
