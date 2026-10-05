@@ -1,14 +1,13 @@
 /**
  * Fuente Cuevana — Extracción directa HLS (.m3u8) / MP4
- * getStreams + extract con resolvers de Embed69/Nuvio (VOE, StreamWish, VidHide)
+ * getStreams + extract con resolvers (VOE, StreamWish, VidHide)
+ * FIX idiomas: title + language/lang/audio/Audio legibles para la app
  */
-
 var TMDB_KEY = 'a2d9bbed370d9f678e34006f8750a5a5';
 var TMDB = 'https://api.themoviedb.org/3';
 var BASE = 'https://wv3.cuevana3.eu';
 var UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-
 var ALLOWED = [
   'streamwish', 'vidhide', 'filelions', 'vidhidepro',
   'streamwish.to', 'vidhidepro.com', 'filelions.com', 'filelions.to',
@@ -17,7 +16,6 @@ var ALLOWED = [
   'playnixes', 'hgplaycdn', 'minochinos', 'vadisov', 'vaiditv',
   'vibuxer', 'premilkyway', 'dintezuvio', 'dramiyos', 'wishembed'
 ];
-
 // ─── HELPERS ─────────────────────────────────────────────
 async function httpGet(url, headers) {
   try {
@@ -36,7 +34,6 @@ async function httpGet(url, headers) {
     return null;
   }
 }
-
 async function httpGetJson(url) {
   try {
     var res = await fetchT(url, {
@@ -48,7 +45,6 @@ async function httpGetJson(url) {
     return null;
   }
 }
-
 function slugify(title) {
   var s = String(title || '').trim().toLowerCase();
   var map = {
@@ -65,16 +61,52 @@ function slugify(title) {
   s = s.replace(/[^a-z0-9\s-]/g, '').replace(/[\s-]+/g, '-');
   return s.replace(/^-+|-+$/g, '');
 }
-
+/**
+ * Normaliza el idioma a etiqueta legible que la app puede filtrar/mostrar.
+ * Antes devolvía códigos (es_MX / es_ES / en_US) y "sub" se mapeaba a en_US → todo se veía mal.
+ */
+function normalizeLanguage(language) {
+  var lang = String(language || '').toLowerCase().trim();
+  if (!lang) return 'Latino';
+  if (
+    lang.indexOf('castellano') >= 0 ||
+    lang.indexOf('españa') >= 0 ||
+    lang.indexOf('es_es') >= 0 ||
+    lang === 'spanish' ||
+    lang === 'esp'
+  ) {
+    return 'Castellano';
+  }
+  if (
+    lang.indexOf('sub') >= 0 ||
+    lang.indexOf('vose') >= 0 ||
+    lang.indexOf('subtit') >= 0
+  ) {
+    return 'Subtitulado';
+  }
+  if (
+    lang.indexOf('ingl') >= 0 ||
+    lang.indexOf('english') >= 0 ||
+    lang.indexOf('en_us') >= 0 ||
+    lang === 'en'
+  ) {
+    return 'Inglés';
+  }
+  if (lang.indexOf('japon') >= 0 || lang.indexOf('ja_') >= 0) {
+    return 'Japonés';
+  }
+  // latino / es_mx / español latino / default
+  return 'Latino';
+}
+/** Código corto opcional (por si alguna UI lo usa) */
 function langCode(language) {
-  var lang = String(language || '').toLowerCase();
-  if (lang.indexOf('castellano') >= 0 || lang.indexOf('españa') >= 0) return 'es_ES';
-  if (lang.indexOf('ingl') >= 0 || lang.indexOf('english') >= 0 || lang.indexOf('sub') >= 0)
-    return 'en_US';
-  if (lang.indexOf('japon') >= 0) return 'ja_JA';
+  var n = normalizeLanguage(language);
+  if (n === 'Castellano') return 'es_ES';
+  if (n === 'Inglés') return 'en_US';
+  if (n === 'Japonés') return 'ja_JA';
+  if (n === 'Subtitulado') return 'sub';
   return 'es_MX';
 }
-
 function isAllowed(name) {
   var n = String(name || '').toLowerCase();
   for (var i = 0; i < ALLOWED.length; i++) {
@@ -84,14 +116,12 @@ function isAllowed(name) {
 }
 // ─── DEBUG / RED / URL (sin depender de new URL: en Hermes/React Native no funciona) ──
 var DEBUG = false; // pon true para ver en consola por qué falla cada embed
-
 function dbg() {
   if (!DEBUG || typeof console === 'undefined') return;
   try {
     console.log.apply(console, ['[Cuevana]'].concat([].slice.call(arguments)));
   } catch (e) {}
 }
-
 // fetch con timeout (evita que un host muerto congele todo getStreams)
 function fetchT(url, opts, ms) {
   opts = opts || {};
@@ -114,12 +144,10 @@ function fetchT(url, opts, ms) {
     }
   );
 }
-
 function originOf(url) {
   var m = /^(https?:\/\/[^\/?#]+)/i.exec(String(url || ''));
   return m ? m[1] : '';
 }
-
 function absUrl(u, base) {
   u = String(u || '').trim();
   if (!u) return u;
@@ -131,14 +159,10 @@ function absUrl(u, base) {
   if (!rest) return origin + '/' + u;
   return origin + rest.replace(/\/[^\/]*$/, '/') + u;
 }
-
 function withHost(url, host) {
   return String(url).replace(/^(https?:\/\/)[^\/?#]+/i, '$1' + host);
 }
-
 // ─── MAPEO DE HOSTS QUE ROTAN ────────────────────────────
-// clave = nombre del dominio SIN tld  →  host destino
-// (funciona con cualquier tld y con subdominios: streamwish.to / .com / .top / www.streamwish.xyz ...)
 var HOST_MAP = {
   streamwish: 'vibuxer.com',
   hglink: 'vibuxer.com',
@@ -151,7 +175,6 @@ var HOST_MAP = {
   vidhidepro: 'callistanise.com',
   vidhide: 'callistanise.com',
 };
-
 function mapDomain(url) {
   var s = String(url || '').trim();
   if (!s) return s;
@@ -164,8 +187,6 @@ function mapDomain(url) {
   }
   return s;
 }
-
-// Orden en el que se intenta un embed: host mapeado → host original → mirror alterno
 function embedCandidates(url) {
   var s = String(url || '').trim();
   if (s.indexOf('//') === 0) s = 'https:' + s;
@@ -176,14 +197,12 @@ function embedCandidates(url) {
     return v && a.indexOf(v) === i;
   });
 }
-
 function hostOf(url) {
   var m = /^(?:https?:)?\/\/([^\/?#]+)/i.exec(String(url || ''));
   return m ? m[1].toLowerCase() : String(url || '').toLowerCase();
 }
-
 function detectServer(url) {
-  var s = hostOf(url); // solo el host, así un "voe" en el path no confunde
+  var s = hostOf(url);
   if (
     s.indexOf('voe') >= 0 ||
     s.indexOf('cloudwindow') >= 0 ||
@@ -221,9 +240,7 @@ function detectServer(url) {
     return 'doodstream';
   return 'unknown';
 }
-
-
-// ─── QUALITY HELPERS (del extractor de referencia) ───────
+// ─── QUALITY HELPERS ─────────────────────────────────────
 var QUALITY_MAPS = {
   vimeos: { h: '720p', n: '480p' },
   goodstream: { x: '1080p', h: '720p', n: '480p', l: '360p' },
@@ -232,7 +249,6 @@ var QUALITY_MAPS = {
   voe: { n: '720p', l: '360p' },
 };
 var QUALITY_ORDER = ['x', 'o', 'h', 'n', 'l'];
-
 function qualityMapForUrl(url) {
   if (url.indexOf('vimeos') >= 0) return QUALITY_MAPS.vimeos;
   if (url.indexOf('goodstream') >= 0) return QUALITY_MAPS.goodstream;
@@ -253,7 +269,6 @@ function qualityMapForUrl(url) {
     return QUALITY_MAPS.streamwish;
   return null;
 }
-
 function detectQualityFromUrl(url) {
   if (!url) return 'Unknown';
   var map = qualityMapForUrl(url);
@@ -270,7 +285,6 @@ function detectQualityFromUrl(url) {
   var p = url.match(/[_\-\/](\d{3,4})p/);
   return p ? p[1] + 'p' : 'Unknown';
 }
-
 function resToQuality(w, h) {
   if (w >= 3840 || h >= 2160) return '4K';
   if (w >= 1920 || h >= 1080) return '1080p';
@@ -278,7 +292,6 @@ function resToQuality(w, h) {
   if (w >= 854 || h >= 480) return '480p';
   return '360p';
 }
-
 async function detectQuality(url, headers) {
   var q = detectQualityFromUrl(url);
   if (q !== 'Unknown') return q;
@@ -309,7 +322,6 @@ async function detectQuality(url, headers) {
     return 'Unknown';
   }
 }
-
 function b64decode(s) {
   try {
     if (typeof atob !== 'undefined') return atob(s);
@@ -317,12 +329,9 @@ function b64decode(s) {
   } catch (e) {}
   return null;
 }
-// ─── PACKER (Dean Edwards) — funciona con cualquier variante del wrapper ─────
-// El bug original: /\{[^}]+\}\s*\(/ fallaba con el wrapper de StreamWish porque
-// el cuerpo de la función tiene muchas "}". Aquí se ancla en los ARGUMENTOS:  }('...',62,N,'...'.split('|')
+// ─── PACKER (Dean Edwards) ───────────────────────────────
 var PACKER_ARGS =
   /\}\s*\(\s*(['"])((?:\\[\s\S]|(?!\1)[^\\])*)\1\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(['"])((?:\\[\s\S]|(?!\5)[^\\])*)\5\s*\.split\(\s*(['"])\|\7\s*\)/g;
-
 function unpackOne(p, a, k) {
   p = p.replace(/\\(['"\\])/g, '$1');
   var chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -341,8 +350,6 @@ function unpackOne(p, a, k) {
     return k[idx] ? k[idx] : tok;
   });
 }
-
-// Devuelve TODAS las capas desempaquetadas (soporta packers anidados)
 function unpackAll(text) {
   var out = [];
   var queue = [String(text || '')];
@@ -361,12 +368,10 @@ function unpackAll(text) {
   }
   return out;
 }
-
 function unpackPacker(code) {
   var all = unpackAll(code);
   return all.length ? all.join('\n') : code;
 }
-
 function findM3u8(text) {
   if (!text) return null;
   var m =
@@ -376,12 +381,8 @@ function findM3u8(text) {
   if (!m) return null;
   return (m[1] || m[0]).replace(/\\/g, '');
 }
-
-// Busca el stream dentro de un texto ya desempaquetado (o HTML plano)
 function extractHlsFromUnpacked(text, origin) {
   if (!text) return null;
-
-  // 1) claves hls4 > hls3 > hls2 > hls  (el bug original: replace(/(\w+)\s*:/) rompía "https:" y el JSON.parse siempre fallaba)
   var found = {};
   var re = /["']?\b(hls[234]?)["']?\s*:\s*["']([^"']+)["']/g;
   var m;
@@ -393,22 +394,14 @@ function extractHlsFromUnpacked(text, origin) {
   }
   var pick = found.hls4 || found.hls3 || found.hls2 || found.hls;
   if (pick) return absUrl(pick, origin + '/');
-
-  // 2) cualquier .m3u8 absoluto
   var abs = findM3u8(text);
   if (abs) return abs;
-
-  // 3) .m3u8 relativo
   var rel = /["'](\/[^"'\s]+\.m3u8[^"']*)["']/i.exec(text);
   if (rel) return absUrl(rel[1].replace(/\\/g, ''), origin + '/');
-
-  // 4) file: "...mp4"
   var f = /file\s*:\s*["']([^"']+\.mp4[^"']*)["']/i.exec(text);
   if (f) return absUrl(f[1].replace(/\\/g, ''), origin + '/');
-
   return null;
 }
-
 function findStream(html, origin) {
   if (!html) return null;
   var layers = unpackAll(html).concat([html]);
@@ -418,8 +411,6 @@ function findStream(html, origin) {
   }
   return null;
 }
-
-// Si el link es /stream/... sin .m3u8, seguir el redirect hasta la playlist real
 async function followStream(u, origin) {
   if (u.indexOf('.m3u8') >= 0 || u.indexOf('.mp4') >= 0) return u;
   if (u.indexOf('/stream/') < 0) return u;
@@ -429,8 +420,7 @@ async function followStream(u, origin) {
   } catch (e) {}
   return u;
 }
-
-// ─── VOE (del extractor de referencia) ───────────────────
+// ─── VOE ─────────────────────────────────────────────────
 function voeDecode(encoded, keysRaw) {
   try {
     var keys = keysRaw
@@ -466,7 +456,6 @@ function voeDecode(encoded, keysRaw) {
     return null;
   }
 }
-
 async function resolveVoe(url) {
   try {
     var res = await fetchT(url, {
@@ -479,8 +468,6 @@ async function resolveVoe(url) {
     });
     if (!res.ok) return null;
     var html = await res.text();
-
-    // permanentToken redirect
     if (/permanentToken/i.test(html)) {
       var redir = html.match(/window\.location\.href\s*=\s*'([^']+)'/i);
       if (redir) {
@@ -491,8 +478,6 @@ async function resolveVoe(url) {
         if (res2.ok) html = await res2.text();
       }
     }
-
-    // JSON encoded + loader script
     var jsonMatch = html.match(
       /json">\s*\[\s*['"]([^'"]+)['"]\s*\]\s*<\/script>\s*<script[^>]*src=['"]([^'"]+)['"]/i
     );
@@ -521,8 +506,6 @@ async function resolveVoe(url) {
         }
       }
     }
-
-    // Fallback: mp4|hls : '...'
     var patterns = [
       /(?:mp4|hls)'\s*:\s*'([^']+)'/gi,
       /(?:mp4|hls)"\s*:\s*"([^"]+)"/gi,
@@ -545,7 +528,6 @@ async function resolveVoe(url) {
         };
       }
     }
-
     var m3u8 = findM3u8(html);
     if (m3u8) {
       return {
@@ -557,7 +539,7 @@ async function resolveVoe(url) {
   } catch (e) {}
   return null;
 }
-// ─── STREAMWISH / VIDHIDE (misma mecánica: página con packer → hls) ──────
+// ─── STREAMWISH / VIDHIDE ────────────────────────────────
 async function resolvePacked(url) {
   var origin = originOf(url);
   var html = null;
@@ -581,24 +563,19 @@ async function resolvePacked(url) {
     headers: { 'User-Agent': UA, Referer: origin + '/', Origin: origin },
   };
 }
-
 function resolveStreamWish(url) {
   return resolvePacked(url);
 }
-
 function resolveVidHide(url) {
   return resolvePacked(url);
 }
-
-// ─── GENÉRICO (player intermedio Cuevana + iframes + fallback) ─────
+// ─── GENÉRICO ────────────────────────────────────────────
 async function resolveGeneric(url, depth) {
   depth = depth || 0;
   try {
     var html = await httpGet(url, { Referer: BASE + '/' });
     if (!html) return null;
     var origin = originOf(url);
-
-    // var url = '...' (player.php estilo Cuevana)
     var m1 = /var url = '([^']+)'/.exec(html) || /var url = "([^"]+)"/.exec(html);
     if (m1) {
       var redirected = absUrl(m1[1], url);
@@ -607,7 +584,6 @@ async function resolveGeneric(url, depth) {
         if (r1) return r1;
       }
     }
-
     var streamUrl = findStream(html, origin);
     if (streamUrl) {
       return {
@@ -616,8 +592,6 @@ async function resolveGeneric(url, depth) {
         headers: { 'User-Agent': UA, Referer: url, Origin: origin },
       };
     }
-
-    // iframe anidado
     var ifr = /<iframe[^>]+src=["']([^"']+)["']/i.exec(html);
     if (ifr) {
       var ifUrl = absUrl(ifr[1], url);
@@ -628,7 +602,6 @@ async function resolveGeneric(url, depth) {
   }
   return null;
 }
-
 // ─── EXTRACT PRINCIPAL ───────────────────────────────────
 function isStreamUrl(u) {
   u = String(u || '').toLowerCase();
@@ -640,7 +613,6 @@ function isStreamUrl(u) {
     u.indexOf('playlist') >= 0
   );
 }
-
 async function extractOne(url, depth) {
   var server = detectServer(url);
   var result = null;
@@ -653,7 +625,6 @@ async function extractOne(url, depth) {
     dbg('resolver error', server, url, e && e.message);
     result = null;
   }
-  // fallback genérico solo si había un resolver específico y falló
   if ((!result || !result.url) && server !== 'unknown') {
     try {
       result = await resolveGeneric(url, depth);
@@ -661,8 +632,6 @@ async function extractOne(url, depth) {
   }
   return result;
 }
-
-// Devuelve SOLO un stream directo (m3u8/mp4). Jamás devuelve el embed.
 async function extract(embedUrl, depth) {
   depth = depth || 0;
   if (!embedUrl || depth > 3) return null;
@@ -677,7 +646,6 @@ async function extract(embedUrl, depth) {
   }
   return null;
 }
-
 // ─── TMDB & CUEVANA SCRAPING ─────────────────────────────
 async function getTmdbInfo(tmdbId, isMovie) {
   var endpoint = isMovie ? 'movie' : 'tv';
@@ -707,7 +675,6 @@ async function getTmdbInfo(tmdbId, isMovie) {
     year: year,
   };
 }
-
 function extractNextData(html) {
   var m = /<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/.exec(html);
   if (!m) return null;
@@ -718,11 +685,11 @@ function extractNextData(html) {
     return null;
   }
 }
-
 function videoGroupsFromData(videos) {
+  // Etiquetas legibles desde el primer momento (no códigos)
   var langMap = {
-    latino: 'Español Latino',
-    spanish: 'Español Castellano',
+    latino: 'Latino',
+    spanish: 'Castellano',
     english: 'Inglés',
     japanese: 'Japonés',
   };
@@ -742,7 +709,6 @@ function videoGroupsFromData(videos) {
   });
   return groups;
 }
-
 async function scrapeMovie(tmdb) {
   var prefix = BASE + '/ver-pelicula/';
   var titles = [tmdb.latino, tmdb.castellano, tmdb.ingles];
@@ -758,7 +724,6 @@ async function scrapeMovie(tmdb) {
   candidates = candidates.filter(function (v, i, a) {
     return a.indexOf(v) === i;
   });
-
   for (var i = 0; i < candidates.length; i++) {
     var html = await httpGet(candidates[i], {
       Accept: 'text/html',
@@ -777,13 +742,11 @@ async function scrapeMovie(tmdb) {
   }
   return [];
 }
-
 async function scrapeEpisode(tmdb, season, episode) {
   var nombres = [];
   if (tmdb.latino && tmdb.latino.trim()) nombres.push(tmdb.latino);
   if (tmdb.castellano && tmdb.castellano.trim()) nombres.push(tmdb.castellano);
   if (tmdb.ingles && tmdb.ingles.trim()) nombres.push(tmdb.ingles);
-
   var candidates = [];
   nombres.forEach(function (nombre) {
     var slug = slugify(nombre);
@@ -809,7 +772,6 @@ async function scrapeEpisode(tmdb, season, episode) {
         episode
     );
   });
-
   for (var i = 0; i < candidates.length; i++) {
     var html = await httpGet(candidates[i], {
       Accept: 'text/html',
@@ -828,59 +790,60 @@ async function scrapeEpisode(tmdb, season, episode) {
   }
   return [];
 }
-
 // ─── MAIN ────────────────────────────────────────────────
 async function processVideo(group, video) {
   try {
     var embedUrl = String(video.url || '').trim();
     if (!embedUrl) return null;
-
-    // extract() ya aplica el cambio de host y prueba los candidatos
     var extracted = await extract(embedUrl, 0);
-
-    // Solo HLS/MP4 reales — NUNCA el embed puro
     if (!extracted || !extracted.url) {
       dbg('descartado (sin m3u8)', embedUrl);
       return null;
     }
-
-    var name = video.cyberlocker
+    var serverName = video.cyberlocker
       ? video.cyberlocker.charAt(0).toUpperCase() + video.cyberlocker.slice(1)
       : 'Servidor';
-
     var q = extracted.quality;
     if (!q || q === 'Unknown') q = video.quality || 'HD';
 
+    // Idioma legible + código (por compatibilidad)
+    var langLabel = normalizeLanguage(group.language);
+    var code = langCode(langLabel);
+
     return {
-      name: 'Cuevana',
+      name: 'Cuevana - ' + q,
+      // title con idioma primero → la app/página lo puede parsear
+      title: langLabel + ' - ' + serverName,
       url: extracted.url,
-      title: 'Cuevana · ' + name,
       quality: q,
-      language: langCode(group.language),
-      headers: extracted.headers || { 'User-Agent': UA, Referer: originOf(embedUrl) + '/' },
+      // Campos de idioma explícitos (misma convención que embed69 fixed)
+      language: langLabel,
+      lang: langLabel,
+      audio: langLabel,
+      Audio: langLabel,
+      langCode: code,
+      provider: serverName,
+      headers: extracted.headers || {
+        'User-Agent': UA,
+        Referer: originOf(embedUrl) + '/',
+      },
     };
   } catch (e) {
     dbg('processVideo error', e && e.message);
     return null;
   }
 }
-
 async function getStreams(tmdbId, type, season, episode) {
   var id = parseInt(tmdbId, 10);
   if (!id) return [];
-
   var isMovie =
     String(type).toLowerCase().indexOf('tv') < 0 &&
     String(type).toLowerCase().indexOf('series') < 0;
-
   var tmdb = await getTmdbInfo(id, isMovie);
   if (!tmdb.latino && !tmdb.ingles && !tmdb.castellano) return [];
-
   var groups = isMovie
     ? await scrapeMovie(tmdb)
     : await scrapeEpisode(tmdb, season || 1, episode || 1);
-
-  // todos los embeds en PARALELO (antes era uno por uno y la app hacía timeout)
   var jobs = [];
   groups.forEach(function (group) {
     group.videos.forEach(function (video) {
@@ -888,7 +851,6 @@ async function getStreams(tmdbId, type, season, episode) {
       jobs.push(processVideo(group, video));
     });
   });
-
   var results = await Promise.all(jobs);
   var out = [];
   var seen = {};
@@ -899,9 +861,9 @@ async function getStreams(tmdbId, type, season, episode) {
   });
   return out;
 }
-
 module.exports = {
   getStreams: getStreams,
   extract: extract,
   mapDomain: mapDomain,
+  normalizeLanguage: normalizeLanguage,
 };
